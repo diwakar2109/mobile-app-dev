@@ -1,0 +1,72 @@
+name: terraform-deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment (Dev/UAT/Prod)"
+        required: true
+        default: "Dev"
+      name_suffix:
+        description: "Name suffix for resource naming (e.g., 001)"
+        required: true
+        default: "001"
+  push:
+    branches:
+      - "dev"
+      - "uat"
+      - "prod"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "true"
+      DEPLOY_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name }}
+      NAME_SUFFIX: ${{ github.event_name == 'workflow_dispatch' && inputs.name_suffix || '001' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform plan
+        env:
+          TF_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_aad_admin_login: ${{ secrets.AZURE_SQL_AAD_ADMIN_LOGIN }}
+          TF_VAR_aad_admin_object_id: ${{ secrets.AZURE_SQL_AAD_ADMIN_OBJECT_ID }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS_JSON }}
+          TF_VAR_environment: ${{ env.DEPLOY_ENV }}
+          TF_VAR_name_suffix: ${{ env.NAME_SUFFIX }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform apply
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TF_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TF_VAR_aad_admin_login: ${{ secrets.AZURE_SQL_AAD_ADMIN_LOGIN }}
+          TF_VAR_aad_admin_object_id: ${{ secrets.AZURE_SQL_AAD_ADMIN_OBJECT_ID }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS_JSON }}
+          TF_VAR_environment: ${{ env.DEPLOY_ENV }}
+          TF_VAR_name_suffix: ${{ env.NAME_SUFFIX }}
+        run: terraform apply -auto-approve tfplan
+
